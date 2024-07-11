@@ -1,55 +1,131 @@
+const express = require('express');
+const { sequelize, User } = require('./models');
+const jwt = require('jsonwebtoken');
+
+const app = express();
 app.use(express.json());
 
-// Create
-app.post('/users', async (req, res) => {
-  const { name, email } = req.body;
+const PORT = process.env.PORT || 3000;
+const SECRET_KEY = 'your_secret_key';
+
+app.post('/register', async (req, res) => {
   try {
-    const result = await pool.query(
-      'INSERT INTO users (name, email) VALUES ($1, $2) RETURNING *',
-      [name, email]
-    );
-    res.json(result.rows[0]);
+    const { name, email, password } = req.body;
+    const newUser = await User.create({ name, email, password });
+    res.json(newUser);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Database insert failed' });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Read
-app.get('/users', async (req, res) => {
+app.post('/login', async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM users');
-    res.json(result.rows);
+    const { email, password } = req.body;
+    const user = await User.findOne({ where: { email } });
+
+    if (user && await user.validatePassword(password)) {
+      const token = jwt.sign({ id: user.id }, SECRET_KEY, { expiresIn: '1h' });
+      res.json({ token });
+    } else {
+      res.status(401).json({ error: 'Invalid credentials' });
+    }
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Database query failed' });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Update
-app.put('/users/:id', async (req, res) => {
-  const { id } = req.params;
-  const { name, email } = req.body;
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) return res.sendStatus(401);
+
+  jwt.verify(token, SECRET_KEY, (err, user) => {
+    if (err) return res.sendStatus(403);
+    req.user = user;
+    next();
+  });
+};
+
+
+// Endpoint: Get all users
+app.get('/users', authenticateToken, async (req, res) => {
   try {
-    const result = await pool.query(
-      'UPDATE users SET name = $1, email = $2 WHERE id = $3 RETURNING *',
-      [name, email, id]
-    );
-    res.json(result.rows[0]);
+    const users = await User.findAll();
+    res.json(users);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Database update failed' });
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Delete
-app.delete('/users/:id', async (req, res) => {
-  const { id } = req.params;
+// Endpoint: Add a new user
+app.post('/users', authenticateToken, async (req, res) => {
   try {
-    await pool.query('DELETE FROM users WHERE id = $1', [id]);
-    res.json({ message: 'User deleted' });
+    const newUser = await User.create(req.body);
+    res.json(newUser);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Database delete failed' });
+    res.status(500).json({ error: err.message });
   }
+});
+
+// Endpoint: Get a user by ID
+app.get('/users/:id', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findByPk(req.params.id);
+    if (user) {
+      res.json(user);
+    } else {
+      res.status(404).json({ error: 'User not found' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint: Update a user by ID
+app.put('/users/:id', authenticateToken, async (req, res) => {
+  try {
+    const [updated] = await User.update(req.body, {
+      where: { id: req.params.id }
+    });
+    if (updated) {
+      const updatedUser = await User.findByPk(req.params.id);
+      res.status(200).json(updatedUser);
+    } else {
+      res.status(404).json({ error: 'User not found' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint: Delete a user by ID
+app.delete('/users/:id', authenticateToken, async (req, res) => {
+  try {
+    const deleted = await User.destroy({
+      where: { id: req.params.id }
+    });
+    if (deleted) {
+      res.status(204).send();
+    } else {
+      res.status(404).json({ error: 'User not found' });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+/**
+ * Starts the server and synchronizes the database schema.
+ *
+ * This function is called when the server is ready to start listening for incoming requests.
+ * It logs a message to the console indicating the port the server is running on, and then
+ * synchronizes the database schema using the `sequelize.sync()` method.
+ *
+ * @param {number} PORT - The port number the server is listening on.
+ */
+app.listen(PORT, async () => {
+  console.log(`Server running on port ${PORT}`);
+  await sequelize.sync({ force: true });
 });
